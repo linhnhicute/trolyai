@@ -3,7 +3,7 @@ import type { Telegraf } from 'telegraf';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { askGptWithImage } from '../services/openai.js';
-import { errorMessage, replyChunked, userErrorReply } from './reply.js';
+import { errorMessage, replyStreaming } from './reply.js';
 
 async function downloadTelegramFile(
   bot: Telegraf,
@@ -40,18 +40,17 @@ export function registerPhoto(bot: Telegraf): void {
         return;
       }
 
-      await ctx.sendChatAction('typing');
       const buf = await downloadTelegramFile(bot, photo.file_id, photo.file_size);
       const prompt = ctx.message.caption?.trim() || 'Mô tả chi tiết ảnh này.';
-      const reply = await askGptWithImage(ctx.chat.id, prompt, toDataUrl(buf, 'image/jpeg'));
-      await replyChunked(ctx, reply);
+      await replyStreaming(ctx, (onDelta) =>
+        askGptWithImage(ctx.chat.id, prompt, toDataUrl(buf, 'image/jpeg'), onDelta),
+      );
     } catch (err) {
       if (errorMessage(err) === 'FILE_TOO_LARGE') {
         await ctx.reply('Ảnh vượt quá 20MB. Gửi ảnh nhỏ hơn nhé.');
         return;
       }
       logger.error({ err: errorMessage(err) }, 'photo handler failed');
-      await ctx.reply(userErrorReply(err));
     }
   });
 
@@ -60,22 +59,17 @@ export function registerPhoto(bot: Telegraf): void {
       const doc = ctx.message.document;
       if (!doc.mime_type?.startsWith('image/')) return;
 
-      await ctx.sendChatAction('typing');
       const buf = await downloadTelegramFile(bot, doc.file_id, doc.file_size);
       const prompt = ctx.message.caption?.trim() || 'Mô tả chi tiết ảnh này.';
-      const reply = await askGptWithImage(
-        ctx.chat.id,
-        prompt,
-        toDataUrl(buf, doc.mime_type || 'image/jpeg'),
+      await replyStreaming(ctx, (onDelta) =>
+        askGptWithImage(ctx.chat.id, prompt, toDataUrl(buf, doc.mime_type || 'image/jpeg'), onDelta),
       );
-      await replyChunked(ctx, reply);
     } catch (err) {
       if (errorMessage(err) === 'FILE_TOO_LARGE') {
         await ctx.reply('Ảnh vượt quá 20MB. Gửi ảnh nhỏ hơn nhé.');
         return;
       }
       logger.error({ err: errorMessage(err) }, 'document image handler failed');
-      await ctx.reply(userErrorReply(err));
     }
   });
 }

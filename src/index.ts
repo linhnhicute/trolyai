@@ -18,7 +18,7 @@ bot
     ]);
     logger.info(
       {
-        baseUrl: config.openaiBaseUrl,
+        chatUrl: config.chatCompletionsUrl,
         model: config.openaiModel,
         allowedUsers: config.allowedUserIds.size,
       },

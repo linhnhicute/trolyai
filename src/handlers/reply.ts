@@ -9,6 +9,58 @@ export async function replyChunked(ctx: Context, text: string): Promise<void> {
   }
 }
 
+export async function replyStreaming(
+  ctx: Context,
+  produce: (onDelta: (text: string) => Promise<void>) => Promise<string>,
+): Promise<void> {
+  if (!ctx.chat) {
+    throw new Error('Không có chat để trả lời');
+  }
+
+  await ctx.sendChatAction('typing');
+  const placeholder = await ctx.reply('…');
+  const chatId = ctx.chat.id;
+  const messageId = placeholder.message_id;
+  let lastSent = '';
+  let lastAt = 0;
+
+  const flush = async (text: string, force = false): Promise<void> => {
+    const body = (text.trim() || '…').slice(0, TELEGRAM_MAX_MESSAGE);
+    if (body === lastSent) return;
+    const now = Date.now();
+    if (!force && now - lastAt < 450) return;
+    lastAt = now;
+    lastSent = body;
+    try {
+      await ctx.telegram.editMessageText(chatId, messageId, undefined, body);
+    } catch {
+      // Telegram từ chối nếu nội dung chưa đổi
+    }
+  };
+
+  const typing = setInterval(() => {
+    ctx.sendChatAction('typing').catch(() => undefined);
+  }, 4000);
+
+  try {
+    const full = await produce((text) => flush(text));
+    await flush(full, true);
+    if (full.length > TELEGRAM_MAX_MESSAGE) {
+      await replyChunked(ctx, full.slice(TELEGRAM_MAX_MESSAGE));
+    }
+  } catch (err) {
+    const msg = userErrorReply(err).slice(0, TELEGRAM_MAX_MESSAGE);
+    try {
+      await ctx.telegram.editMessageText(chatId, messageId, undefined, msg);
+    } catch {
+      await ctx.reply(msg);
+    }
+    throw err;
+  } finally {
+    clearInterval(typing);
+  }
+}
+
 export function commandName(text: string | undefined): string | null {
   if (!text?.startsWith('/')) return null;
   const token = text.split(/\s/, 1)[0] ?? '';
@@ -25,7 +77,7 @@ export function userErrorReply(err: unknown): string {
   const msg = errorMessage(err);
 
   if (/\b401\b|invalid api key|incorrect api key|unauthorized/i.test(msg)) {
-    return 'API key HOCAI không hợp lệ. Kiểm tra OPENAI_API_KEY trong .env rồi restart bot.';
+    return 'API key HOCAI không hợp lệ. Kiểm tra HOCAI_API_KEY trong .env rồi restart bot.';
   }
   if (/\b403\b|forbidden|not allowed/i.test(msg)) {
     return 'API key HOCAI không có quyền dùng model này. Kiểm tra gói/model trên danglamgiau.com.';
