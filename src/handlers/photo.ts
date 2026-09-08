@@ -3,7 +3,7 @@ import type { Telegraf } from 'telegraf';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { askGptWithImage } from '../services/openai.js';
-import { errorMessage, replyChunked } from './reply.js';
+import { errorMessage, replyChunked, userErrorReply } from './reply.js';
 
 async function downloadTelegramFile(
   bot: Telegraf,
@@ -51,7 +51,7 @@ export function registerPhoto(bot: Telegraf): void {
         return;
       }
       logger.error({ err: errorMessage(err) }, 'photo handler failed');
-      await ctx.reply('Xin lỗi, mình gặp lỗi khi xử lý ảnh. Thử lại nhé.');
+      await ctx.reply(userErrorReply(err));
     }
   });
 
@@ -75,7 +75,7 @@ export function registerPhoto(bot: Telegraf): void {
         return;
       }
       logger.error({ err: errorMessage(err) }, 'document image handler failed');
-      await ctx.reply('Xin lỗi, mình gặp lỗi khi xử lý ảnh. Thử lại nhé.');
+      await ctx.reply(userErrorReply(err));
     }
   });
 }

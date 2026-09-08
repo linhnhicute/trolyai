@@ -5,7 +5,7 @@ import { registerCommands } from './handlers/commands.js';
 import { registerPhoto } from './handlers/photo.js';
 import { registerText } from './handlers/text.js';
 import { logger } from './logger.js';
-import { errorMessage } from './handlers/reply.js';
+import { errorMessage, userErrorReply } from './handlers/reply.js';
 
 export function createBot(): Telegraf {
   const bot = new Telegraf(config.telegramBotToken);
@@ -18,7 +18,7 @@ export function createBot(): Telegraf {
   bot.catch(async (err, ctx) => {
     logger.error({ err: errorMessage(err) }, 'unhandled bot error');
     try {
-      await ctx.reply('Xin lỗi, mình gặp lỗi khi xử lý. Thử lại nhé.');
+      await ctx.reply(userErrorReply(err));
     } catch {
       // ignore reply failure
     }

@@ -2,7 +2,7 @@ import type { Telegraf } from 'telegraf';
 import { logger } from '../logger.js';
 import { resetHistory } from '../services/history.js';
 import { generateImage } from '../services/openai.js';
-import { errorMessage, replyChunked } from './reply.js';
+import { errorMessage, replyChunked, userErrorReply } from './reply.js';
 
 const HELP_TEXT = [
   'Các lệnh:',
@@ -82,7 +82,7 @@ export function registerCommands(bot: Telegraf): void {
       }
     } catch (err) {
       logger.error({ err: errorMessage(err) }, 'img handler failed');
-      await ctx.reply('Xin lỗi, mình gặp lỗi khi tạo ảnh. Thử lại nhé.');
+      await ctx.reply(userErrorReply(err));
     }
   });
 }

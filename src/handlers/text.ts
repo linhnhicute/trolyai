@@ -2,7 +2,7 @@ import { message } from 'telegraf/filters';
 import type { Telegraf } from 'telegraf';
 import { logger } from '../logger.js';
 import { askGpt } from '../services/openai.js';
-import { commandName, errorMessage, replyChunked } from './reply.js';
+import { commandName, errorMessage, replyChunked, userErrorReply } from './reply.js';
 
 export function registerText(bot: Telegraf): void {
   bot.on(message('text'), async (ctx) => {
@@ -14,7 +14,7 @@ export function registerText(bot: Telegraf): void {
       await replyChunked(ctx, reply);
     } catch (err) {
       logger.error({ err: errorMessage(err) }, 'text handler failed');
-      await ctx.reply('Xin lỗi, mình gặp lỗi khi xử lý. Thử lại nhé.');
+      await ctx.reply(userErrorReply(err));
     }
   });
 }
