@@ -1,0 +1,57 @@
+---
+description: Cách nhận ảnh từ Telegram và gửi ảnh (vision + tạo ảnh) cho bot GPT
+alwaysApply: true
+---
+
+# Nhận & gửi ảnh
+
+## Nhận ảnh từ user (vision)
+
+Telegram gửi `photo` là mảng nhiều size — luôn lấy phần tử cuối (độ phân giải cao nhất). Tải file rồi truyền vào model dạng data URL base64; không lưu ảnh xuống disk nếu không cần.
+
+```ts
+bot.on(message('photo'), async (ctx) => {
+  const photo = ctx.message.photo.at(-1)!;              // size lớn nhất
+  const link = await ctx.telegram.getFileLink(photo.file_id);
+  const buf = Buffer.from(await (await fetch(link.href)).arrayBuffer());
+  const dataUrl = `data:image/jpeg;base64,${buf.toString('base64')}`;
+  const prompt = ctx.message.caption ?? 'Mô tả chi tiết ảnh này.';
+
+  const res = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',                                // model phải hỗ trợ vision
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ],
+    }],
+  });
+  await ctx.reply(res.choices[0].message.content ?? '(trống)');
+});
+```
+
+Lưu ý:
+- Ảnh gửi dạng file gốc đến qua `message('document')` với mime `image/*` — xử lý tương tự.
+- Giới hạn kích thước tải (ví dụ 20MB) và từ chối lịch sự nếu vượt.
+- Trong history, lưu ảnh dưới dạng mô tả text ngắn thay vì base64 để tiết kiệm token.
+
+## Gửi ảnh cho user
+
+```ts
+// Ảnh tạo bởi model
+const img = await openai.images.generate({
+  model: 'gpt-image-1',
+  prompt,
+  size: '1024x1024',
+});
+const buffer = Buffer.from(img.data[0].b64_json!, 'base64');
+await ctx.replyWithPhoto({ source: buffer }, { caption: prompt.slice(0, 1024) });
+
+// Ảnh từ URL sẵn có
+await ctx.replyWithPhoto({ url: imageUrl });
+```
+
+- Dùng `sendChatAction('upload_photo')` trước khi upload.
+- Caption tối đa 1024 ký tự; phần mô tả dài hơn gửi thành tin nhắn text riêng.
+- Command tạo ảnh: `/img <mô tả>`; nếu thiếu mô tả thì hướng dẫn lại cú pháp.

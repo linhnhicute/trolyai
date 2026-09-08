@@ -1,0 +1,48 @@
+---
+description: Kiến trúc và quy ước cho bot Telegram (Telegraf + OpenAI SDK)
+alwaysApply: true
+---
+
+# Telegram GPT Bot
+
+Stack cố định: Node.js 20+, TypeScript ESM, `telegraf`, `openai`, `dotenv`. Không thêm framework khác nếu chưa được yêu cầu. Build & chạy bằng Docker — xem rule `telegram-bot-docker`.
+
+## Cấu trúc
+
+```
+src/
+  index.ts        # bootstrap, launch bot, graceful shutdown
+  bot.ts          # khởi tạo Telegraf, đăng ký middleware + handler
+  handlers/       # text.ts, photo.ts, commands.ts
+  services/openai.ts   # mọi lệnh gọi OpenAI đặt ở đây
+  services/history.ts  # lịch sử hội thoại theo chatId
+  config.ts       # đọc & validate env
+Dockerfile
+docker-compose.yml
+.dockerignore
+```
+
+## Quy ước bắt buộc
+
+- Secret chỉ lấy từ env: `TELEGRAM_BOT_TOKEN`, `OPENAI_API_KEY`, `OPENAI_MODEL` (default `gpt-4o-mini`). Validate trong `config.ts`, throw sớm nếu thiếu. Không hardcode token, luôn có `.env.example` và `.env` trong `.gitignore`.
+- Handler chỉ làm việc với Telegram (parse update, reply). Logic gọi GPT nằm trong `services/openai.ts`.
+- Lịch sử hội thoại lưu theo `chatId`, giới hạn N lượt gần nhất (default 10) để tránh phình token. Có command `/reset` để xoá.
+- Mọi handler bọc trong try/catch, log lỗi và reply thông báo thân thiện bằng tiếng Việt — không để bot im lặng.
+- Với request lâu, gửi `ctx.sendChatAction('typing')` trước khi gọi API.
+- Telegram giới hạn 4096 ký tự/tin nhắn: chia nhỏ output dài trước khi reply.
+- Dev dùng long polling (`bot.launch()`); chỉ dùng webhook khi user yêu cầu deploy.
+
+## Ví dụ handler text
+
+```ts
+bot.on(message('text'), async (ctx) => {
+  try {
+    await ctx.sendChatAction('typing');
+    const reply = await askGpt(ctx.chat.id, ctx.message.text);
+    await replyChunked(ctx, reply);
+  } catch (err) {
+    logger.error({ err }, 'text handler failed');
+    await ctx.reply('Xin lỗi, mình gặp lỗi khi xử lý. Thử lại nhé.');
+  }
+});
+```

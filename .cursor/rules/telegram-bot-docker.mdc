@@ -1,0 +1,59 @@
+---
+description: Quy ước build và chạy bot Telegram bằng Docker / docker compose
+alwaysApply: true
+---
+
+# Docker
+
+Mọi lệnh build/run/deploy đều qua Docker. Không hướng dẫn user chạy `npm start` trực tiếp trên máy host (trừ khi debug nhanh).
+
+## Dockerfile — multi-stage, chạy non-root
+
+```dockerfile
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=build /app/dist ./dist
+USER node
+CMD ["node", "dist/index.js"]
+```
+
+## docker-compose.yml
+
+```yaml
+services:
+  bot:
+    build: .
+    env_file: .env
+    restart: unless-stopped
+    init: true
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+```
+
+## Quy ước bắt buộc
+
+- Secret truyền qua `env_file`/biến môi trường, **không** `COPY .env` vào image và không dùng `ARG` cho API key.
+- `.dockerignore` phải có: `node_modules`, `dist`, `.env`, `.git`, `*.log`.
+- Layer cache: copy `package*.json` và `npm ci` trước khi copy source.
+- Bot cần bắt `SIGINT`/`SIGTERM` (`bot.stop()`) để container stop sạch; dùng `init: true` thay vì tự làm PID 1 handler.
+- Long polling nên không expose port. Chỉ mở port khi chuyển sang webhook, và khi đó thêm `healthcheck` trỏ vào endpoint HTTP.
+- Nếu cần lưu lịch sử/ảnh lâu dài thì mount named volume, tuyệt đối không ghi vào layer container.
+
+## Lệnh chuẩn
+
+```bash
+docker compose up -d --build   # build & chạy
+docker compose logs -f bot     # xem log
+docker compose down            # dừng
+```
