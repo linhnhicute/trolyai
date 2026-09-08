@@ -1,4 +1,5 @@
 import type { Context } from 'telegraf';
+import type { ChatReply } from '../services/media.js';
 
 const TELEGRAM_MAX_MESSAGE = 4096;
 
@@ -9,10 +10,23 @@ export async function replyChunked(ctx: Context, text: string): Promise<void> {
   }
 }
 
+export async function replyWithImages(
+  ctx: Context,
+  images: Buffer[],
+  caption?: string,
+): Promise<void> {
+  if (!images.length) return;
+  await ctx.sendChatAction('upload_photo');
+  for (let i = 0; i < images.length; i += 1) {
+    const options = i === 0 && caption ? { caption: caption.slice(0, 1024) } : undefined;
+    await ctx.replyWithPhoto({ source: images[i]! }, options);
+  }
+}
+
 export async function replyStreaming(
   ctx: Context,
-  produce: (onDelta: (text: string) => Promise<void>) => Promise<string>,
-): Promise<void> {
+  produce: (onDelta: (text: string) => Promise<void>) => Promise<string | ChatReply>,
+): Promise<ChatReply> {
   if (!ctx.chat) {
     throw new Error('Không có chat để trả lời');
   }
@@ -43,11 +57,15 @@ export async function replyStreaming(
   }, 4000);
 
   try {
-    const full = await produce((text) => flush(text));
-    await flush(full, true);
-    if (full.length > TELEGRAM_MAX_MESSAGE) {
-      await replyChunked(ctx, full.slice(TELEGRAM_MAX_MESSAGE));
+    const produced = await produce((text) => flush(text));
+    const reply: ChatReply =
+      typeof produced === 'string' ? { text: produced, images: [] } : produced;
+    await flush(reply.text, true);
+    if (reply.text.length > TELEGRAM_MAX_MESSAGE) {
+      await replyChunked(ctx, reply.text.slice(TELEGRAM_MAX_MESSAGE));
     }
+    await replyWithImages(ctx, reply.images);
+    return reply;
   } catch (err) {
     const msg = userErrorReply(err).slice(0, TELEGRAM_MAX_MESSAGE);
     try {

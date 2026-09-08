@@ -1,12 +1,15 @@
 import type { Telegraf } from 'telegraf';
 import { logger } from '../logger.js';
 import { resetHistory } from '../services/history.js';
+import { findModel, getChatModel, listHocaiModels, setChatModel } from '../services/models.js';
 import { generateImage } from '../services/openai.js';
 import { errorMessage, replyChunked, userErrorReply } from './reply.js';
 
 const HELP_TEXT = [
   'Các lệnh:',
   '/getid — lấy Telegram user ID của bạn',
+  '/checkmodel — xem model đang dùng và danh sách HOCAI',
+  '/setmodel <id> — đổi model chat',
   '/reset — xoá lịch sử hội thoại',
   '/img <mô tả> — tạo ảnh từ mô tả',
   '/help — xem hướng dẫn',
@@ -52,6 +55,69 @@ export function registerCommands(bot: Telegraf): void {
     } catch (err) {
       logger.error({ err: errorMessage(err) }, 'getid handler failed');
       await ctx.reply('Xin lỗi, mình gặp lỗi khi xử lý. Thử lại nhé.');
+    }
+  });
+
+  bot.command('checkmodel', async (ctx) => {
+    try {
+      await ctx.sendChatAction('typing');
+      const current = getChatModel();
+      const models = await listHocaiModels();
+      const lines = [
+        `Model đang dùng: ${current}`,
+        '',
+        `Danh sách HOCAI (${models.length}):`,
+      ];
+
+      if (models.length === 0) {
+        lines.push('(trống)');
+      } else {
+        for (const model of models) {
+          const mark = model.id === current ? ' ← đang dùng' : '';
+          const owner = model.owned_by && model.owned_by !== '...' ? ` (${model.owned_by})` : '';
+          lines.push(`• ${model.id}${owner}${mark}`);
+        }
+      }
+
+      lines.push('', 'Đổi model: /setmodel <id>');
+      await replyChunked(ctx, lines.join('\n'));
+    } catch (err) {
+      logger.error({ err: errorMessage(err) }, 'checkmodel handler failed');
+      await ctx.reply(userErrorReply(err));
+    }
+  });
+
+  bot.command('setmodel', async (ctx) => {
+    try {
+      const requested = ctx.message.text.replace(/^\/setmodel(?:@\w+)?\s*/i, '').trim();
+      if (!requested) {
+        await ctx.reply(
+          `Model hiện tại: ${getChatModel()}\nCú pháp: /setmodel <id>\nVí dụ: /setmodel gpt-4o\nXem danh sách: /checkmodel`,
+        );
+        return;
+      }
+
+      await ctx.sendChatAction('typing');
+      let chosen = requested;
+      try {
+        const models = await listHocaiModels();
+        const matched = findModel(models, requested);
+        if (!matched) {
+          await ctx.reply(
+            `Không thấy model "${requested}" trên HOCAI.\nGửi /checkmodel để xem danh sách, rồi /setmodel <id> đúng tên.`,
+          );
+          return;
+        }
+        chosen = matched.id;
+      } catch (err) {
+        logger.error({ err: errorMessage(err) }, 'setmodel list failed, vẫn set theo tên nhập');
+      }
+
+      const model = await setChatModel(chosen);
+      await ctx.reply(`Đã đổi model chat thành: ${model}`);
+    } catch (err) {
+      logger.error({ err: errorMessage(err) }, 'setmodel handler failed');
+      await ctx.reply(userErrorReply(err));
     }
   });
 

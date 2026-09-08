@@ -4,6 +4,11 @@ services:
     env_file: .env
     restart: unless-stopped
     init: true
+    volumes:
+      - bot-data:/app/data
     logging:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  bot-data:

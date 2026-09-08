@@ -2,8 +2,10 @@ import { createBot } from './bot.js';
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { configureHistory } from './services/history.js';
+import { getChatModel, loadSelectedModel } from './services/models.js';
 
 configureHistory(config.historyLimit);
+await loadSelectedModel();
 
 const bot = createBot();
 
@@ -12,6 +14,8 @@ bot
   .then(async () => {
     await bot.telegram.setMyCommands([
       { command: 'getid', description: 'Lấy Telegram user ID' },
+      { command: 'checkmodel', description: 'Xem danh sách model HOCAI' },
+      { command: 'setmodel', description: 'Đổi model chat' },
       { command: 'reset', description: 'Xoá lịch sử hội thoại' },
       { command: 'img', description: 'Tạo ảnh từ mô tả' },
       { command: 'help', description: 'Xem hướng dẫn' },
@@ -19,7 +23,7 @@ bot
     logger.info(
       {
         chatUrl: config.chatCompletionsUrl,
-        model: config.openaiModel,
+        model: getChatModel(),
         allowedUsers: config.allowedUserIds.size,
       },
       'Bot Telegram đang chạy (long polling)',
