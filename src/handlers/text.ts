@@ -5,11 +5,18 @@ import { appendTurn } from '../services/history.js';
 import { getLastPhoto, isConfirmGenerate, isImageEditIntent } from '../services/media.js';
 import { askGpt, editImage, generateImage } from '../services/openai.js';
 import { commandName, errorMessage, replyStreaming, replyWithImages } from './reply.js';
+import { KNOWN_COMMANDS } from './commands.js';
 
 export function registerText(bot: Telegraf): void {
   bot.on(message('text'), async (ctx) => {
     try {
-      if (commandName(ctx.message.text)) return;
+      const cmd = commandName(ctx.message.text);
+      if (cmd) {
+        if (!KNOWN_COMMANDS.has(cmd)) {
+          await ctx.reply('Lệnh không khả dụng. Gửi /help để xem các lệnh đang hỗ trợ.');
+        }
+        return;
+      }
 
       const last = getLastPhoto(ctx.chat.id);
       const wantsImage = isImageEditIntent(ctx.message.text) || isConfirmGenerate(ctx.message.text);

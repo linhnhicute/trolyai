@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { configureHistory } from './services/history.js';
 import { getChatModel, loadSelectedModel } from './services/models.js';
+import { PUBLIC_BOT_COMMANDS } from './handlers/commands.js';
 
 configureHistory(config.historyLimit);
 await loadSelectedModel();
@@ -12,14 +13,7 @@ const bot = createBot();
 bot
   .launch()
   .then(async () => {
-    await bot.telegram.setMyCommands([
-      { command: 'getid', description: 'Lấy Telegram user ID' },
-      { command: 'checkmodel', description: 'Xem danh sách model HOCAI' },
-      { command: 'setmodel', description: 'Đổi model chat' },
-      { command: 'reset', description: 'Xoá lịch sử hội thoại' },
-      { command: 'img', description: 'Tạo ảnh từ mô tả' },
-      { command: 'help', description: 'Xem hướng dẫn' },
-    ]);
+    await bot.telegram.setMyCommands(PUBLIC_BOT_COMMANDS);
     logger.info(
       {
         chatUrl: config.chatCompletionsUrl,

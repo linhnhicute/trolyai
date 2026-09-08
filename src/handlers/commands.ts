@@ -1,27 +1,49 @@
 import type { Telegraf } from 'telegraf';
 import { logger } from '../logger.js';
 import { resetHistory } from '../services/history.js';
-import { findModel, getChatModel, listHocaiModels, setChatModel } from '../services/models.js';
+import { findModel, formatModelLine, getChatModel, listHocaiModels, setChatModel } from '../services/models.js';
 import { generateImage } from '../services/openai.js';
 import { errorMessage, replyChunked, userErrorReply } from './reply.js';
 
 const HELP_TEXT = [
-  'Các lệnh:',
+  'Các lệnh đang hỗ trợ:',
+  '/help — xem danh sách lệnh',
   '/getid — lấy Telegram user ID của bạn',
-  '/checkmodel — xem model đang dùng và danh sách HOCAI',
+  '/checkmodel — xem model đang dùng, danh sách và giá Input/Output',
   '/setmodel <id> — đổi model chat',
-  '/reset — xoá lịch sử hội thoại',
   '/img <mô tả> — tạo ảnh từ mô tả',
-  '/help — xem hướng dẫn',
+  '/reset — xoá lịch sử hội thoại',
   '',
   'Gửi tin nhắn hoặc ảnh để hỏi bot.',
+  'Lệnh không có trong danh sách sẽ báo không khả dụng.',
 ].join('\n');
+
+export const KNOWN_COMMANDS = new Set([
+  '/start',
+  '/help',
+  '/getid',
+  '/checkmodel',
+  '/setmodel',
+  '/img',
+  '/reset',
+]);
+
+export const PUBLIC_BOT_COMMANDS = [{ command: 'getid', description: 'Lấy Telegram user ID' }];
+
+export const ALLOWED_BOT_COMMANDS = [
+  { command: 'help', description: 'Xem danh sách lệnh' },
+  { command: 'getid', description: 'Lấy Telegram user ID' },
+  { command: 'checkmodel', description: 'Xem danh sách model HOCAI' },
+  { command: 'setmodel', description: 'Đổi model chat' },
+  { command: 'img', description: 'Tạo ảnh từ mô tả' },
+  { command: 'reset', description: 'Xoá lịch sử hội thoại' },
+];
 
 export function registerCommands(bot: Telegraf): void {
   bot.start(async (ctx) => {
     try {
       await ctx.reply(
-        'Xin chào, mình là trợ lý AI trên Telegram.\nGửi tin nhắn để hỏi, hoặc /help để xem lệnh.',
+        'Xin chào, mình là trợ lý AI trên Telegram.\nGửi /help để xem lệnh, hoặc nhắn tin để hỏi bot.',
       );
     } catch (err) {
       logger.error({ err: errorMessage(err) }, 'start handler failed');
@@ -67,15 +89,14 @@ export function registerCommands(bot: Telegraf): void {
         `Model đang dùng: ${current}`,
         '',
         `Danh sách HOCAI (${models.length}):`,
+        'Giá: Input / Output (Credit/1M token)',
       ];
 
       if (models.length === 0) {
         lines.push('(trống)');
       } else {
         for (const model of models) {
-          const mark = model.id === current ? ' ← đang dùng' : '';
-          const owner = model.owned_by && model.owned_by !== '...' ? ` (${model.owned_by})` : '';
-          lines.push(`• ${model.id}${owner}${mark}`);
+          lines.push(formatModelLine(model, current));
         }
       }
 

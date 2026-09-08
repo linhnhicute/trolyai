@@ -83,7 +83,7 @@ export function commandName(text: string | undefined): string | null {
   if (!text?.startsWith('/')) return null;
   const token = text.split(/\s/, 1)[0] ?? '';
   const name = token.split('@', 1)[0];
-  return name || null;
+  return (name || '').toLowerCase() || null;
 }
 
 export function errorMessage(err: unknown): string {

@@ -59,6 +59,14 @@ const openaiBaseUrl = (process.env.OPENAI_BASE_URL?.trim() || 'https://danglamgi
   '',
 );
 
+const siteOrigin = (() => {
+  try {
+    return new URL(openaiBaseUrl).origin;
+  } catch {
+    return 'https://danglamgiau.com';
+  }
+})();
+
 export const config = {
   telegramBotToken: requireEnv('TELEGRAM_BOT_TOKEN'),
   hocaiApiKey: resolveApiKey(),
@@ -66,6 +74,7 @@ export const config = {
   chatCompletionsUrl:
     process.env.HOCAI_CHAT_URL?.trim() || `${openaiBaseUrl}/chat/completions`,
   modelsUrl: process.env.HOCAI_MODELS_URL?.trim() || `${openaiBaseUrl}/models`,
+  pricingUrl: process.env.HOCAI_PRICING_URL?.trim() || `${siteOrigin}/api/pricing`,
   openaiModel: process.env.OPENAI_MODEL?.trim() || 'gpt-4o',
   openaiImageModel: process.env.OPENAI_IMAGE_MODEL?.trim() || 'gpt-image-2',
   temperature: parseNumber('HOCAI_TEMPERATURE', 0.7),
