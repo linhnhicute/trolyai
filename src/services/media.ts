@@ -25,8 +25,16 @@ export function getLastPhoto(chatId: number): CachedPhoto | undefined {
 }
 
 export function isImageEditIntent(text: string): boolean {
-  return /(ghép|sửa ảnh|chỉnh ảnh|tạo ảnh|vẽ lại|biến thành|đổi thành|thành ở|thay nền|đưa vào|đặt vào|inpaint|composite|photoshop|edit (this )?photo|generate image)/i.test(
-    text,
+  const value = text.trim();
+  if (!value || value === 'Mô tả chi tiết ảnh này.') return false;
+  if (
+    /(mô tả|miêu tả|ảnh này là gì|đây là gì|describe|what(?:'s| is) this)/i.test(value) &&
+    !/(chỉnh|sửa|ghép|tạo|đổi|thay|edit|generate)/i.test(value)
+  ) {
+    return false;
+  }
+  return /(chỉnh|sửa|ghép|tạo ảnh|tạo lại|làm lại|vẽ|đổi|thay|biến thành|thành ở|đưa vào|đặt vào|thay nền|edit|generate|inpaint|composite|photoshop|render)/i.test(
+    value,
   );
 }
 

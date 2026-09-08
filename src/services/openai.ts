@@ -1,14 +1,8 @@
-import OpenAI from 'openai';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { appendTurn, getHistory } from './history.js';
 import { extractImageSources, sourcesToBuffers, stripImagePayloads, type ChatReply } from './media.js';
 import { getChatModel } from './models.js';
-
-const client = new OpenAI({
-  apiKey: config.hocaiApiKey,
-  baseURL: config.openaiBaseUrl,
-});
 
 const SYSTEM_PROMPT =
   'Bạn là trợ lý AI trên Telegram. Trả lời bằng tiếng Việt, rõ ràng, ngắn gọn và hữu ích. Khi người dùng nhờ tạo hoặc chỉnh ảnh, đừng nói là đã tạo xong nếu không đính kèm dữ liệu ảnh (URL hoặc base64). Bot sẽ tự gửi ảnh lên Telegram.';
@@ -129,20 +123,22 @@ async function readSseContent(
 async function chatCompletions(
   messages: ChatCompletionMessage[],
   onDelta?: OnDelta,
+  options?: { stream?: boolean; model?: string; maxTokens?: number },
 ): Promise<ChatReply> {
+  const stream = options?.stream ?? config.stream;
   const res = await fetch(config.chatCompletionsUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.hocaiApiKey}`,
       'Content-Type': 'application/json',
-      Accept: config.stream ? 'text/event-stream' : 'application/json',
+      Accept: stream ? 'text/event-stream' : 'application/json',
     },
     body: JSON.stringify({
-      model: getChatModel(),
+      model: options?.model || getChatModel(),
       messages,
-      stream: config.stream,
+      stream,
       temperature: config.temperature,
-      max_tokens: config.maxTokens,
+      max_tokens: options?.maxTokens ?? config.maxTokens,
     }),
   });
 
@@ -153,7 +149,7 @@ async function chatCompletions(
   }
 
   const contentType = res.headers.get('content-type') ?? '';
-  if (!config.stream || (contentType.includes('application/json') && !contentType.includes('text/event-stream'))) {
+  if (!stream || (contentType.includes('application/json') && !contentType.includes('text/event-stream'))) {
     const json: unknown = await res.json();
     const rec = json as { choices?: Array<{ message?: { content?: unknown } }> };
     const acc: StreamAcc = { text: '', sources: [] };
@@ -218,45 +214,34 @@ export async function askGptWithImage(
   return reply;
 }
 
+async function bufferFromImageApi(json: unknown, emptyMessage: string): Promise<Buffer> {
+  const images = await sourcesToBuffers(extractImageSources(json));
+  if (images[0]) return images[0];
+  throw new Error(emptyMessage);
+}
+
 export async function generateImage(prompt: string): Promise<Buffer> {
-  let img;
-  try {
-    img = await client.images.generate({
+  const res = await fetch(config.imagesGenerationsUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.hocaiApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
       model: config.openaiImageModel,
       prompt,
       n: 1,
       size: '1024x1024',
-    });
-  } catch (err) {
-    if (err instanceof OpenAI.APIError) {
-      logger.error(
-        {
-          action: 'image',
-          status: err.status,
-          code: err.code,
-          type: err.type,
-          err: err.message,
-        },
-        'HOCAI API error',
-      );
-      throw new Error(`HOCAI ${err.status ?? ''} ${err.message}`.trim());
-    }
-    throw err;
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    logger.error({ status: res.status, err: detail, url: config.imagesGenerationsUrl }, 'HOCAI image generate error');
+    throw new Error(`HOCAI ${res.status} ${detail}`.trim());
   }
 
-  const item = img.data?.[0];
-  if (item?.b64_json) {
-    return Buffer.from(item.b64_json, 'base64');
-  }
-  if (item?.url) {
-    const res = await fetch(item.url);
-    if (!res.ok) {
-      throw new Error(`Không tải được ảnh từ HOCAI (${res.status})`);
-    }
-    return Buffer.from(await res.arrayBuffer());
-  }
-
-  throw new Error('HOCAI không trả về ảnh');
+  return bufferFromImageApi(await res.json(), 'HOCAI không trả về ảnh');
 }
 
 export async function editImage(image: Buffer, mime: string, prompt: string): Promise<Buffer> {
@@ -269,7 +254,7 @@ export async function editImage(image: Buffer, mime: string, prompt: string): Pr
   form.append('n', '1');
   form.append('size', '1024x1024');
 
-  const res = await fetch(`${config.openaiBaseUrl}/images/edits`, {
+  const res = await fetch(config.imagesEditsUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.hocaiApiKey}`,
@@ -279,12 +264,49 @@ export async function editImage(image: Buffer, mime: string, prompt: string): Pr
 
   if (!res.ok) {
     const detail = await readErrorDetail(res);
-    logger.error({ status: res.status, err: detail }, 'HOCAI image edit error');
+    logger.error({ status: res.status, err: detail, url: config.imagesEditsUrl }, 'HOCAI image edit error');
     throw new Error(`HOCAI ${res.status} ${detail}`.trim());
   }
 
-  const json: unknown = await res.json();
-  const images = await sourcesToBuffers(extractImageSources(json));
-  if (images[0]) return images[0];
-  throw new Error('HOCAI không trả về ảnh đã chỉnh');
+  return bufferFromImageApi(await res.json(), 'HOCAI không trả về ảnh đã chỉnh');
+}
+
+export async function editOrGenerateImage(
+  image: Buffer,
+  mime: string,
+  prompt: string,
+): Promise<Buffer> {
+  try {
+    return await editImage(image, mime, prompt);
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : String(err) }, 'images/edits failed');
+  }
+
+  try {
+    const dataUrl = `data:${mime || 'image/jpeg'};base64,${image.toString('base64')}`;
+    const reply = await chatCompletions(
+      [
+        {
+          role: 'system',
+          content:
+            'Bạn chỉnh sửa ảnh theo yêu cầu. Trả về ảnh kết quả (image url hoặc base64), không chỉ mô tả bằng chữ.',
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+      undefined,
+      { stream: false, model: config.openaiImageModel, maxTokens: 4096 },
+    );
+    if (reply.images[0]) return reply.images[0];
+    logger.error({ text: reply.text.slice(0, 200) }, 'image model chat không kèm ảnh');
+  } catch (err) {
+    logger.error({ err: err instanceof Error ? err.message : String(err) }, 'image model chat failed');
+  }
+
+  return generateImage(`${prompt}. Giữ bố cục/người trong ảnh gốc nếu có thể.`);
 }
