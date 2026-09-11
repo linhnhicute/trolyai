@@ -3,7 +3,7 @@ import { logger } from '../logger.js';
 import { resetHistory } from '../services/history.js';
 import { findModel, formatModelLine, getChatModel, listHocaiModels, setChatModel } from '../services/models.js';
 import { generateImage } from '../services/openai.js';
-import { errorMessage, replyChunked, userErrorReply } from './reply.js';
+import { errorMessage, replyChunked, replyWithImages, userErrorReply } from './reply.js';
 
 const HELP_TEXT = [
   'Các lệnh đang hỗ trợ:',
@@ -11,10 +11,11 @@ const HELP_TEXT = [
   '/getid — lấy Telegram user ID của bạn',
   '/checkmodel — xem model đang dùng, danh sách và giá Input/Output',
   '/setmodel <id> — đổi model chat',
-  '/img <mô tả> — tạo ảnh từ mô tả',
+  '/img <mô tả> — tạo ảnh mới từ mô tả',
   '/reset — xoá lịch sử hội thoại',
   '',
   'Gửi tin nhắn hoặc ảnh để hỏi bot.',
+  'Gửi ảnh kèm caption (chỉnh/ghép/sửa…) để chỉnh đúng tấm ảnh đó, không tạo ảnh mới.',
   'Lệnh không có trong danh sách sẽ báo không khả dụng.',
 ].join('\n');
 
@@ -160,13 +161,9 @@ export function registerCommands(bot: Telegraf): void {
         return;
       }
 
-      await ctx.sendChatAction('upload_photo');
+      await ctx.sendChatAction('typing');
       const buffer = await generateImage(prompt);
-      const caption = prompt.slice(0, 1024);
-      await ctx.replyWithPhoto({ source: buffer }, { caption });
-      if (prompt.length > 1024) {
-        await replyChunked(ctx, prompt.slice(1024));
-      }
+      await replyWithImages(ctx, [buffer], prompt);
     } catch (err) {
       logger.error({ err: errorMessage(err) }, 'img handler failed');
       await ctx.reply(userErrorReply(err));

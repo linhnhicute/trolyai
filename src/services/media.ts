@@ -51,6 +51,21 @@ export function stripImagePayloads(text: string): string {
     .trim();
 }
 
+export function looksLikeImage(buf: Buffer): boolean {
+  if (buf.byteLength < 12) return false;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return true;
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return true;
+  if (buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46) return true;
+  return buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+}
+
+export function imageFilename(buf: Buffer): string {
+  if (buf[0] === 0x89 && buf[1] === 0x50) return 'image.png';
+  if (buf[0] === 0x47 && buf[1] === 0x49) return 'image.gif';
+  if (buf.toString('ascii', 0, 4) === 'RIFF') return 'image.webp';
+  return 'image.jpg';
+}
+
 export function extractImageSources(payload: unknown, text = ''): string[] {
   const found: string[] = [];
   const push = (src: string) => {
@@ -94,19 +109,36 @@ export function extractImageSources(payload: unknown, text = ''): string[] {
   return found;
 }
 
+export function parseImageApiPayload(json: unknown): string[] {
+  const rec = json as { data?: unknown };
+  if (Array.isArray(rec.data)) {
+    const sources: string[] = [];
+    for (const item of rec.data) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as { b64_json?: string; b64?: string; url?: string };
+      if (row.b64_json) sources.push(`data:image/png;base64,${row.b64_json}`);
+      else if (row.b64) sources.push(`data:image/png;base64,${row.b64}`);
+      else if (row.url) sources.push(row.url);
+    }
+    if (sources.length) return sources;
+  }
+  return extractImageSources(json);
+}
+
 export async function sourceToBuffer(src: string): Promise<Buffer | null> {
   try {
     if (src.startsWith('data:image/')) {
       const base64 = src.split(',')[1];
       if (!base64) return null;
-      return Buffer.from(base64, 'base64');
+      const buf = Buffer.from(base64, 'base64');
+      return looksLikeImage(buf) ? buf : null;
     }
     if (!/^https?:\/\//i.test(src)) return null;
     const res = await fetch(src);
     if (!res.ok) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.byteLength === 0 || buf.byteLength > config.maxImageBytes) return null;
-    return buf;
+    return looksLikeImage(buf) ? buf : null;
   } catch {
     return null;
   }

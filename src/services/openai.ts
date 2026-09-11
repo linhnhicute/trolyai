@@ -1,7 +1,7 @@
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { appendTurn, getHistory } from './history.js';
-import { extractImageSources, sourcesToBuffers, stripImagePayloads, type ChatReply } from './media.js';
+import { extractImageSources, looksLikeImage, parseImageApiPayload, sourcesToBuffers, stripImagePayloads, type ChatReply } from './media.js';
 import { getChatModel } from './models.js';
 
 const SYSTEM_PROMPT =
@@ -19,11 +19,6 @@ type ChatCompletionMessage = {
   content: ChatContent;
 };
 
-type StreamAcc = {
-  text: string;
-  sources: string[];
-};
-
 type OnDelta = (text: string) => Promise<void> | void;
 
 async function readErrorDetail(res: Response): Promise<string> {
@@ -36,107 +31,59 @@ async function readErrorDetail(res: Response): Promise<string> {
   }
 }
 
-function pushSources(acc: StreamAcc, payload: unknown, extraText = ''): void {
-  for (const src of extractImageSources(payload, extraText)) {
-    if (!acc.sources.includes(src)) acc.sources.push(src);
-  }
-}
-
-function appendDeltaContent(acc: StreamAcc, content: unknown): void {
-  if (typeof content === 'string') {
-    acc.text += content;
-    pushSources(acc, content, content);
-    return;
-  }
+function contentToText(content: unknown): string {
+  if (content == null) return '';
+  if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
-    for (const part of content) {
-      if (typeof part === 'string') {
-        acc.text += part;
-        continue;
-      }
-      if (part && typeof part === 'object') {
-        const rec = part as { type?: string; text?: string };
-        if (rec.type === 'text' && typeof rec.text === 'string') acc.text += rec.text;
-      }
-    }
-    pushSources(acc, content);
+    return content.map((part) => contentToText(part)).join('');
   }
+  if (typeof content === 'object') {
+    const rec = content as { text?: unknown; content?: unknown };
+    if (typeof rec.text === 'string') return rec.text;
+    if (rec.content != null && rec.content !== content) return contentToText(rec.content);
+  }
+  return '';
 }
 
-async function toChatReply(acc: StreamAcc): Promise<ChatReply> {
-  const images = await sourcesToBuffers(acc.sources);
-  const text = stripImagePayloads(acc.text).trim() || (images.length ? 'Đã tạo ảnh.' : '(trống)');
-  return { text, images };
-}
+async function replyFromChatJson(json: unknown, onDelta?: OnDelta): Promise<ChatReply> {
+  const rec = json as {
+    error?: { message?: string };
+    choices?: Array<{ message?: { content?: unknown } }>;
+  };
+  if (rec.error?.message) throw new Error(rec.error.message);
 
-async function readSseContent(
-  res: Response,
-  onDelta?: OnDelta,
-): Promise<ChatReply> {
-  if (!res.body) {
-    throw new Error('HOCAI không trả về stream');
+  const content = rec.choices?.[0]?.message?.content;
+  const text = stripImagePayloads(contentToText(content)).trim();
+  const images = await sourcesToBuffers(extractImageSources(json, text));
+
+  if (!text && !images.length) {
+    logger.error(
+      { preview: JSON.stringify(json).slice(0, 1500) },
+      'HOCAI không có choices[0].message.content',
+    );
+    throw new Error('HOCAI không trả về choices[0].message.content');
   }
 
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  const acc: StreamAcc = { text: '', sources: [] };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() ?? '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data:')) continue;
-      const data = trimmed.slice(5).trim();
-      if (!data || data === '[DONE]') continue;
-
-      try {
-        const json = JSON.parse(data) as {
-          choices?: Array<{
-            delta?: { content?: unknown };
-            message?: { content?: unknown };
-          }>;
-        };
-        pushSources(acc, json);
-        const delta = json.choices?.[0]?.delta;
-        const message = json.choices?.[0]?.message;
-        if (delta?.content != null) appendDeltaContent(acc, delta.content);
-        else if (message?.content != null) appendDeltaContent(acc, message.content);
-
-        const visible = stripImagePayloads(acc.text) || (acc.sources.length ? 'Đang tạo ảnh…' : '');
-        if (visible) await onDelta?.(visible);
-      } catch {
-        // bỏ qua dòng SSE lỗi
-      }
-    }
-  }
-
-  return toChatReply(acc);
+  const reply: ChatReply = { text: text || 'Đã tạo ảnh.', images };
+  await onDelta?.(reply.text);
+  return reply;
 }
 
 async function chatCompletions(
   messages: ChatCompletionMessage[],
   onDelta?: OnDelta,
-  options?: { stream?: boolean; model?: string; maxTokens?: number },
+  options?: { model?: string; maxTokens?: number },
 ): Promise<ChatReply> {
-  const stream = options?.stream ?? config.stream;
   const res = await fetch(config.chatCompletionsUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${config.hocaiApiKey}`,
       'Content-Type': 'application/json',
-      Accept: stream ? 'text/event-stream' : 'application/json',
     },
     body: JSON.stringify({
       model: options?.model || getChatModel(),
       messages,
-      stream,
+      stream: false,
       temperature: config.temperature,
       max_tokens: options?.maxTokens ?? config.maxTokens,
     }),
@@ -148,19 +95,7 @@ async function chatCompletions(
     throw new Error(`HOCAI ${res.status} ${detail}`.trim());
   }
 
-  const contentType = res.headers.get('content-type') ?? '';
-  if (!stream || (contentType.includes('application/json') && !contentType.includes('text/event-stream'))) {
-    const json: unknown = await res.json();
-    const rec = json as { choices?: Array<{ message?: { content?: unknown } }> };
-    const acc: StreamAcc = { text: '', sources: [] };
-    pushSources(acc, json);
-    appendDeltaContent(acc, rec.choices?.[0]?.message?.content);
-    const reply = await toChatReply(acc);
-    await onDelta?.(reply.text);
-    return reply;
-  }
-
-  return readSseContent(res, onDelta);
+  return replyFromChatJson(await res.json(), onDelta);
 }
 
 export async function askGpt(
@@ -215,9 +150,29 @@ export async function askGptWithImage(
 }
 
 async function bufferFromImageApi(json: unknown, emptyMessage: string): Promise<Buffer> {
-  const images = await sourcesToBuffers(extractImageSources(json));
-  if (images[0]) return images[0];
+  const images = await sourcesToBuffers(parseImageApiPayload(json));
+  if (images[0] && looksLikeImage(images[0])) return images[0];
   throw new Error(emptyMessage);
+}
+
+async function readImageResponse(res: Response, emptyMessage: string): Promise<Buffer> {
+  const contentType = res.headers.get('content-type') ?? '';
+  if (contentType.startsWith('image/')) {
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (!looksLikeImage(buf)) {
+      throw new Error(emptyMessage);
+    }
+    return buf;
+  }
+
+  const text = await res.text();
+  try {
+    return await bufferFromImageApi(JSON.parse(text), emptyMessage);
+  } catch {
+    const buf = Buffer.from(text, 'base64');
+    if (looksLikeImage(buf)) return buf;
+    throw new Error(emptyMessage);
+  }
 }
 
 export async function generateImage(prompt: string): Promise<Buffer> {
@@ -241,14 +196,27 @@ export async function generateImage(prompt: string): Promise<Buffer> {
     throw new Error(`HOCAI ${res.status} ${detail}`.trim());
   }
 
-  return bufferFromImageApi(await res.json(), 'HOCAI không trả về ảnh');
+  return readImageResponse(res, 'HOCAI không trả về ảnh');
 }
 
-export async function editImage(image: Buffer, mime: string, prompt: string): Promise<Buffer> {
+function imageBlob(image: Buffer, mime: string): { blob: Blob; filename: string } {
   const type = mime || 'image/jpeg';
   const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
+  return {
+    blob: new Blob([new Uint8Array(image)], { type }),
+    filename: `image.${ext}`,
+  };
+}
+
+async function editImageMultipart(
+  image: Buffer,
+  mime: string,
+  prompt: string,
+  fieldName: 'image' | 'image[]',
+): Promise<Buffer> {
+  const { blob, filename } = imageBlob(image, mime);
   const form = new FormData();
-  form.append('image', new Blob([new Uint8Array(image)], { type }), `image.${ext}`);
+  form.append(fieldName, blob, filename);
   form.append('prompt', prompt);
   form.append('model', config.openaiImageModel);
   form.append('n', '1');
@@ -264,49 +232,109 @@ export async function editImage(image: Buffer, mime: string, prompt: string): Pr
 
   if (!res.ok) {
     const detail = await readErrorDetail(res);
-    logger.error({ status: res.status, err: detail, url: config.imagesEditsUrl }, 'HOCAI image edit error');
+    logger.error(
+      { status: res.status, err: detail, url: config.imagesEditsUrl, fieldName },
+      'HOCAI image edit error',
+    );
     throw new Error(`HOCAI ${res.status} ${detail}`.trim());
   }
 
-  return bufferFromImageApi(await res.json(), 'HOCAI không trả về ảnh đã chỉnh');
+  return readImageResponse(res, 'HOCAI không trả về ảnh đã chỉnh');
 }
 
-export async function editOrGenerateImage(
-  image: Buffer,
-  mime: string,
-  prompt: string,
-): Promise<Buffer> {
+export async function editImage(image: Buffer, mime: string, prompt: string): Promise<Buffer> {
+  try {
+    return await editImageMultipart(image, mime, prompt, 'image');
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      'images/edits field=image failed, retry image[]',
+    );
+    return editImageMultipart(image, mime, prompt, 'image[]');
+  }
+}
+
+async function editImageViaJson(image: Buffer, mime: string, prompt: string): Promise<Buffer> {
+  const dataUrl = `data:${mime || 'image/jpeg'};base64,${image.toString('base64')}`;
+  const res = await fetch(config.imagesEditsUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.hocaiApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: config.openaiImageModel,
+      prompt,
+      n: 1,
+      size: '1024x1024',
+      response_format: 'b64_json',
+      image: dataUrl,
+    }),
+  });
+
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    throw new Error(`HOCAI ${res.status} ${detail}`.trim());
+  }
+
+  return readImageResponse(res, 'HOCAI không trả về ảnh đã chỉnh');
+}
+
+async function editImageViaChat(image: Buffer, mime: string, prompt: string): Promise<Buffer> {
+  const dataUrl = `data:${mime || 'image/jpeg'};base64,${image.toString('base64')}`;
+  const reply = await chatCompletions(
+    [
+      {
+        role: 'system',
+        content:
+          'Chỉnh sửa đúng tấm ảnh người dùng gửi. Giữ người, khuôn mặt, dáng và chi tiết gốc. Chỉ thay đổi theo yêu cầu. Trả về ảnh kết quả (url hoặc base64), không tạo ảnh mới unrelated, không chỉ mô tả.',
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: `Chỉnh tấm ảnh này (đây là ảnh gốc, không được vẽ lại từ đầu): ${prompt}` },
+          { type: 'image_url', image_url: { url: dataUrl } },
+        ],
+      },
+    ],
+    undefined,
+    { model: config.openaiImageModel, maxTokens: 4096 },
+  );
+
+  if (reply.images[0] && looksLikeImage(reply.images[0])) {
+    return reply.images[0];
+  }
+  throw new Error(reply.text || 'Model không trả về ảnh đã chỉnh từ ảnh gốc');
+}
+
+export async function editUploadedImage(image: Buffer, mime: string, prompt: string): Promise<Buffer> {
+  const errors: string[] = [];
+
   try {
     return await editImage(image, mime, prompt);
   } catch (err) {
-    logger.error({ err: err instanceof Error ? err.message : String(err) }, 'images/edits failed');
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`edits-form: ${msg}`);
+    logger.error({ err: msg }, 'images/edits multipart failed');
   }
 
   try {
-    const dataUrl = `data:${mime || 'image/jpeg'};base64,${image.toString('base64')}`;
-    const reply = await chatCompletions(
-      [
-        {
-          role: 'system',
-          content:
-            'Bạn chỉnh sửa ảnh theo yêu cầu. Trả về ảnh kết quả (image url hoặc base64), không chỉ mô tả bằng chữ.',
-        },
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            { type: 'image_url', image_url: { url: dataUrl } },
-          ],
-        },
-      ],
-      undefined,
-      { stream: false, model: config.openaiImageModel, maxTokens: 4096 },
-    );
-    if (reply.images[0]) return reply.images[0];
-    logger.error({ text: reply.text.slice(0, 200) }, 'image model chat không kèm ảnh');
+    return await editImageViaJson(image, mime, prompt);
   } catch (err) {
-    logger.error({ err: err instanceof Error ? err.message : String(err) }, 'image model chat failed');
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`edits-json: ${msg}`);
+    logger.error({ err: msg }, 'images/edits json failed');
   }
 
-  return generateImage(`${prompt}. Giữ bố cục/người trong ảnh gốc nếu có thể.`);
+  try {
+    return await editImageViaChat(image, mime, prompt);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    errors.push(`chat-edit: ${msg}`);
+    logger.error({ err: msg }, 'image chat edit failed');
+  }
+
+  throw new Error(
+    `Không chỉnh được ảnh gốc (không tạo ảnh mới). ${errors.join(' | ')}`.slice(0, 500),
+  );
 }

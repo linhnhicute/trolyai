@@ -1,10 +1,12 @@
 import type { Context } from 'telegraf';
-import type { ChatReply } from '../services/media.js';
+import { imageFilename, looksLikeImage, type ChatReply } from '../services/media.js';
+import { logger } from '../logger.js';
 
 const TELEGRAM_MAX_MESSAGE = 4096;
 
 export async function replyChunked(ctx: Context, text: string): Promise<void> {
-  const body = text.trim() ? text : '(trống)';
+  const body = text.trim();
+  if (!body) return;
   for (let offset = 0; offset < body.length; offset += TELEGRAM_MAX_MESSAGE) {
     await ctx.reply(body.slice(offset, offset + TELEGRAM_MAX_MESSAGE));
   }
@@ -16,10 +18,26 @@ export async function replyWithImages(
   caption?: string,
 ): Promise<void> {
   if (!images.length) return;
-  await ctx.sendChatAction('upload_photo');
-  for (let i = 0; i < images.length; i += 1) {
+
+  const valid = images.filter((buf) => looksLikeImage(buf));
+  if (!valid.length) {
+    throw new Error('HOCAI không trả về file ảnh hợp lệ để gửi Telegram');
+  }
+
+  for (let i = 0; i < valid.length; i += 1) {
+    const buf = valid[i]!;
+    const filename = imageFilename(buf);
+    await ctx.sendChatAction('upload_photo');
     const options = i === 0 && caption ? { caption: caption.slice(0, 1024) } : undefined;
-    await ctx.replyWithPhoto({ source: images[i]! }, options);
+    try {
+      await ctx.replyWithPhoto({ source: buf, filename }, options);
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err), bytes: buf.byteLength, filename },
+        'replyWithPhoto failed, fallback document',
+      );
+      await ctx.replyWithDocument({ source: buf, filename }, options);
+    }
   }
 }
 

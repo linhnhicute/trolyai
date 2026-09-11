@@ -82,7 +82,7 @@ export const config = {
   openaiImageModel: process.env.OPENAI_IMAGE_MODEL?.trim() || 'gpt-image-2',
   temperature: parseNumber('HOCAI_TEMPERATURE', 0.7),
   maxTokens: parsePositiveInt('HOCAI_MAX_TOKENS', 1000),
-  stream: (process.env.HOCAI_STREAM?.trim() || 'true').toLowerCase() !== 'false',
+  stream: (process.env.HOCAI_STREAM?.trim() || 'false').toLowerCase() === 'true',
   historyLimit: parsePositiveInt('HISTORY_LIMIT', 10),
   allowedUserIds: parseAllowedUserIds(process.env.ALLOWED_USER_IDS),
   maxImageBytes: 20 * 1024 * 1024,

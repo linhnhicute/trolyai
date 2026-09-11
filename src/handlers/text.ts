@@ -3,7 +3,7 @@ import type { Telegraf } from 'telegraf';
 import { logger } from '../logger.js';
 import { appendTurn } from '../services/history.js';
 import { getLastPhoto, isConfirmGenerate, isImageEditIntent } from '../services/media.js';
-import { askGpt, editOrGenerateImage } from '../services/openai.js';
+import { askGpt, editUploadedImage } from '../services/openai.js';
 import { KNOWN_COMMANDS } from './commands.js';
 import { commandName, errorMessage, replyStreaming, replyWithImages, userErrorReply } from './reply.js';
 
@@ -25,8 +25,8 @@ export function registerText(bot: Telegraf): void {
         const prompt = isConfirmGenerate(ctx.message.text)
           ? `${last.prompt}. ${ctx.message.text}`
           : ctx.message.text;
-        await ctx.sendChatAction('upload_photo');
-        const image = await editOrGenerateImage(last.buf, last.mime, prompt);
+        await ctx.sendChatAction('typing');
+        const image = await editUploadedImage(last.buf, last.mime, prompt);
         await replyWithImages(ctx, [image], prompt);
         appendTurn(
           ctx.chat.id,

@@ -4,7 +4,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { appendTurn } from '../services/history.js';
 import { isImageEditIntent, rememberPhoto } from '../services/media.js';
-import { askGptWithImage, editOrGenerateImage } from '../services/openai.js';
+import { askGptWithImage, editUploadedImage } from '../services/openai.js';
 import { errorMessage, replyStreaming, replyWithImages, userErrorReply } from './reply.js';
 
 async function downloadTelegramFile(
@@ -42,14 +42,14 @@ export function registerPhoto(bot: Telegraf): void {
         return;
       }
 
-      await ctx.sendChatAction('upload_photo');
+      await ctx.sendChatAction('typing');
       const buf = await downloadTelegramFile(bot, photo.file_id, photo.file_size);
       const prompt = ctx.message.caption?.trim() || 'Mô tả chi tiết ảnh này.';
       const mime = 'image/jpeg';
       rememberPhoto(ctx.chat.id, buf, mime, prompt);
 
       if (isImageEditIntent(prompt)) {
-        const image = await editOrGenerateImage(buf, mime, prompt);
+        const image = await editUploadedImage(buf, mime, prompt);
         await replyWithImages(ctx, [image], prompt);
         appendTurn(
           ctx.chat.id,
@@ -77,14 +77,14 @@ export function registerPhoto(bot: Telegraf): void {
       const doc = ctx.message.document;
       if (!doc.mime_type?.startsWith('image/')) return;
 
-      await ctx.sendChatAction('upload_photo');
+      await ctx.sendChatAction('typing');
       const buf = await downloadTelegramFile(bot, doc.file_id, doc.file_size);
       const prompt = ctx.message.caption?.trim() || 'Mô tả chi tiết ảnh này.';
       const mime = doc.mime_type || 'image/jpeg';
       rememberPhoto(ctx.chat.id, buf, mime, prompt);
 
       if (isImageEditIntent(prompt)) {
-        const image = await editOrGenerateImage(buf, mime, prompt);
+        const image = await editUploadedImage(buf, mime, prompt);
         await replyWithImages(ctx, [image], prompt);
         appendTurn(
           ctx.chat.id,
